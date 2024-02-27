@@ -1,65 +1,170 @@
 ---
-title: An Example SunPy Presentation
-subtitle: Conference / Location / Date
+title: "synthesizAR: A Python framework for forward-modeling optically-thin emission from field-aligned hydrodynamic models" 
+subtitle: SUNCAST Workshop / NJIT / 28 February 2024
 authors:
-- A. Speaker
-- B. Presenter
-- The SunPy Project
+- Will Barnes
 institute:
-- Example University
-- NASA
+- AU/NASA GSFC
 format:
   revealjs:
     margin: 0
     width: 100%
     height: 100%
-    theme: [default, theme/sunpy-theme.scss]
-    logo: static/sunpy_logo_landscape.svg
-    footer: "[wtbarnes.github.io/sunpy-presentation-template](https://wtbarnes.github.io/sunpy-presentation-template)"
+    theme: [default,theme/sunpy-theme.scss]
+    logo: static/sunpy_logo_portrait_powered.png
+    footer: "[wtbarnes.github.io/suncast-2024-talk](https://wtbarnes.github.io/suncast-2024-talk)"
 title-slide-attributes: 
-  data-background-image: static/sunpy_icon.svg
-  data-background-position: -100% 50%
-  data-background-opacity: 50%
-  data-background-size: 80%
+  data-background-image: static/synthesizar_logo_vertical.png
+  data-background-position: 5% 25%
+  data-background-opacity: 45%
+  data-background-size: 35%
+bibliography: references.bib
+csl: apj.csl
 ---
 ```{python}
 #| echo: false
 #| eval: true
-import os
-os.environ["PARFIVE_HIDE_PROGRESS"] = "True"
-```
-
-# The `sunpy` Package
-
----
-
-![](static/tour.svg){height="750"}
-
-## The package includes...
-
-- Data search and retrieval
-- Data structures for timeseries and image data
-- Coordinate frames and conversions
-- and much more!
-
-## Another slide with a plot inline
-
-```{python}
-#| fig-align: center
-import sunpy.map
-import sunpy.data.sample
-
-m = sunpy.map.Map(sunpy.data.sample.AIA_171_IMAGE)
-m.peek()
-```
-
-## You can also include code
-
-The code below shows how to create a coordinate in the same frame as the map shown before.
-```{python}
-# | echo: true
-import astropy.coordinates
+import astropy.time
 import astropy.units as u
-my_coord = astropy.coordinates.SkyCoord(Tx=300*u.arcsec, Ty=500*u.arcsec, frame=m.coordinate_frame)
-print(my_coord)
+from astropy.coordinates import SkyCoord
 ```
+
+## Problem
+
+- Modeling optically-thin emission requires computing the following line-of-sight integral:
+$$
+p = \int\mathrm{d}h\,K(n,T)n^2,
+$$
+- where:
+  - $K$ is the response function (e.g. instrument response, contribution function of line)
+  - $n\equiv n(h),T\equiv T(h)$ are temperature and density along the LOS
+- This requires knowing three things:
+  - What structures intersect the LOS (i.e. the geometry)
+  - The temperature and density of these structures as a function of space and time
+  - How the plasma is emitting as a function of $n,T$ (i.e. atomic physics)
+
+## Design 
+
+- `synthesizAR` = `synthesi`s of `A`ctive `R`egion emission (pronounced like "synthesizer")
+- Modular design--geometry, field-aligned model, instrument, LOS are all configurable
+- Parallelized using `dask`--emission computation from each loop is "embarassingly" parallel
+- Emission model can account for time-dependent effects (e.g. non-equilibrium ionization)
+- Limitations:
+  - All emission is assumed to be **optically-thin**
+  - All emission is assumed to be **thermal** (i.e. no transport effects)
+  - All emission confined to **discrete field lines** (i.e. not volume filling)
+
+::: {.aside}
+More details in @barnes_understanding_2019
+:::
+
+## Workflow {background-image="figures/synthesizar-flowchart.png" background-size="85%" background-position="center"}
+
+## Development
+
+:::: {.columns}
+
+::: {.column width="5%"}
+:::
+
+::: {.column width="45%"}
+![](figures/synthesizar-github.png)
+:::
+
+::: {.column width="45%"}
+![](figures/synthesizar-docs.png)
+:::
+
+::: {.column width="5%"}
+:::
+
+::::
+
+## Toy Loop Model
+
+```{python}
+#| echo: true
+#| fig-align: center
+import synthesizAR
+from synthesizAR.models import semi_circular_bundle
+
+obstime = astropy.time.Time.now()
+pos = SkyCoord(lon=0*u.deg, lat=0*u.deg, radius=1*u.AU, obstime=obstime, frame='heliographic_stonyhurst')
+bundle_coords = semi_circular_bundle(50 * u.Mm, 1*u.Mm, 500, observer=pos)
+
+strands = [synthesizAR.Loop(f'strand{i}', c) for i, c in enumerate(bundle_coords)]
+bundle = synthesizAR.Skeleton(strands)
+bundle.peek(observer=pos)
+```
+
+## Toy Loop Model
+
+```{python}
+#| echo: true
+#| fig-align: center
+#| output-location: fragment
+from synthesizAR.instruments import InstrumentSDOAIA
+from synthesizAR.interfaces import RTVInterface
+
+rtv = RTVInterface(heating_rate=1e-3*u.Unit('erg cm-3 s-1'))
+bundle.load_loop_simulations(rtv)
+
+aia = InstrumentSDOAIA([0, 1]*u.s, pos, pad_fov=(10, 10)*u.arcsec)
+maps = aia.observe(bundle, channels=aia.channels[2:3])
+maps['171'][0].peek()
+```
+
+## Toy Loop Model: Different Observer
+
+```{python}
+#| echo: true
+#| fig-align: center
+#| output-location: fragment
+#| code-line-numbers: "|1"
+side_on_view = SkyCoord(lon=0*u.deg, lat=-90*u.deg, radius=1*u.AU, frame=pos.frame)
+aia = InstrumentSDOAIA([0, 1]*u.s, side_on_view, pad_fov=(10, 10)*u.arcsec)
+maps = aia.observe(bundle, channels=aia.channels[2:3])
+maps['171'][0].peek()
+```
+
+## Toy Loop Model: Using a Different Loop Model
+
+```{python}
+#| echo: true
+#| fig-align: center
+#| output-location: fragment
+#| code-line-numbers: "|3,4"
+from synthesizAR.interfaces import MartensInterface
+
+martens = MartensInterface(1e-3*u.Unit('erg cm-3 s-1'))
+bundle.load_loop_simulations(martens)
+maps = aia.observe(bundle, channels=aia.channels[2:3])
+maps['171'][0].peek()
+```
+
+## Toy Loop Model: Advanced Emission Modeling
+
+## A Multi-instrument Example
+
+## Application: Active Region Heating {background-video="movies/noaa1158_low_frequency.mp4" background-size="contain" background-video-loop="true"}
+
+::: {.aside}
+See @barnes_understanding_2019,@barnes_understanding_2021
+:::
+
+## Application: EUV Flare Emission {background-video="http://solar.physics.montana.edu/www/reu/2022/bparker/files/aia_211_dist.mp4" background-size="contain" background-video-loop="true"}
+
+::: {.aside}
+Courtesy Brock Parker and Chunming Zhu (MSU)
+:::
+
+## Application: Full-disk Stellar Modeling {background-iframe="https://drive.google.com/file/d/1Cjv6iCoDv6__iNRz2B_7jkGGPTS43KGu/preview"}
+
+::: {.aside}
+Courtesy Alison Farrish (NASA GSFC), @farrish_simulation_2018
+:::
+
+## Summary
+
+::: {#refs}
+:::
