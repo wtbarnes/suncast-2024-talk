@@ -29,6 +29,7 @@ csl: apj.csl
 import astropy.time
 import astropy.units as u
 import matplotlib.pyplot as plt
+import numpy as np
 import sunpy.map
 
 from astropy.coordinates import SkyCoord
@@ -53,7 +54,7 @@ $$
 ## The `synthesizAR` Package
 
 - `synthesizAR` = `synthesi`s of `A`ctive `R`egion emission (pronounced like "synthesizer")
-- Largely a product of my PhD--many growing pains
+- Largely a product of my PhD--development started in 2016, sporadic since 2019, *many* growing pains
 - Pure Python, leverages scientific Python and "PyAstro" software stack
 - Modular design--geometry, field-aligned model, instrument, LOS are all configurable
 - Parallelized using `dask`--emission computation from each loop is "embarassingly" parallel
@@ -205,6 +206,65 @@ martens = MartensInterface(1e-3*u.Unit('erg cm-3 s-1'))
 bundle.load_loop_simulations(martens)
 maps = aia.observe(bundle, channels=aia.channels[2:3])
 maps['171'][0].peek()
+```
+
+## Aside: The `fiasco` Python interface to CHIANTI
+
+- Object oriented approach, HDF5 database, `astropy.units` everywhere
+- Currently only compatible with **v8** of the database
+
+```{python}
+#| echo: true
+#| output-location: column-fragment
+import fiasco
+temperature = np.logspace(5, 7, 100) * u.K
+fe_15 = fiasco.Ion('Fe 15', temperature)
+print(fe_15)
+```
+```{python}
+#| echo: true
+#| output-location: column-fragment
+print(fe_15[0])
+```
+```{python}
+#| echo: true
+#| output-location: column-fragment
+print(fe_15.ionization_rate[50:55])
+```
+
+```{python}
+#| echo: true
+#| output-location: column-fragment
+iron = fiasco.Element('iron', temperature)
+print(type(iron[14]))
+print(iron[14].ion_name)
+```
+
+::: footer
+[github.com/wtbarnes/fiasco](https://github.com/wtbarnes/fiasco), [fiasco.readthedocs.io](https://fiasco.readthedocs.io)
+:::
+
+## Toy Loop Model: Advanced Emission Modeling
+
+- By default, `InstrumentSDOAIA` computes emission using temperature response functions
+- Insufficient for: varying abundances, density dependence, time-dependent ionization
+- Alternative: compute emissivity of each loop *per ion* and then integrate over $R(\lambda)$
+- `EmissionModel`: select which ions you want to include, temperature range, density range
+
+```{python}
+#| eval: false
+#| echo: true
+from synthesizAR.atomic import EmissionModel
+
+ni_14 = fiasco.Ion('Ni XIV', temperature)
+fe_9 = fiasco.Ion('Fe IX', temperature)
+
+density = np.logspace(8,12,20) * u.cm**(-3)
+em_model = EmissionModel(density, fe_9, ni_14)
+
+em_model.calculate_emissivity_table('emiss_table.zarr')
+
+maps = aia.observe(bundle, channels=aia.channels[2:3], emission_model=em_model)
 ```
 
 ## A Multi-instrument Example
